@@ -2,13 +2,16 @@ import { connection } from "next/server";
 import { refresh } from "next/cache";
 import type { Filter } from "mongodb";
 import { getDb } from "@/shared/db";
+import {
+  GOAL_DIFFS,
+  MATCH_CATEGORIES,
+  MATCH_RESULTS,
+  type GoalDiff,
+  type MatchCategory,
+  type MatchResult,
+} from "@/shared/constants/matches";
 
 const COLLECTION = "matches";
-
-export const MATCH_RESULTS = [
-  { value: "win", label: "Win" },
-  { value: "loss", label: "Loss" },
-] as const;
 
 // si un des 2 > 120, alors c'est déséquilibré
 // si les 2 sont > 80 alors c'est déséquilibré
@@ -19,15 +22,15 @@ export const MATCH_RESULTS = [
 // série win streak / lose streak
 // détail par journées / sessions matin, midi, aprem
 
-export type MatchResult = (typeof MATCH_RESULTS)[number]["value"];
-
-export const MATCH_CATEGORIES = [
-  { value: "smurf", label: "Smurf" },
-  { value: "unfair", label: "Unfair" },
-  { value: "balanced", label: "Balanced" },
-] as const;
-
-export type MatchCategory = (typeof MATCH_CATEGORIES)[number]["value"];
+// Re-exported so server-side callers keep a single import for "matches".
+export {
+  MATCH_RESULTS,
+  MATCH_CATEGORIES,
+  GOAL_DIFFS,
+  type MatchResult,
+  type MatchCategory,
+  type GoalDiff,
+};
 
 type MatchDocument = {
   eloOpponent1: number;
@@ -104,10 +107,72 @@ export const createMatch = async (formData: FormData) => {
  * own midnight and hands it over, so the boundary is right whatever the
  * timezone the server runs in.
  */
-export type MatchFilter = { since?: Date };
+export type MatchFilter = {
+  since?: Date;
+  result?: MatchResult;
+  category?: MatchCategory;
+  goalDiff?: GoalDiff;
+};
 
-const buildQuery = ({ since }: MatchFilter = {}): Filter<MatchDocument> =>
-  since ? { createdAt: { $gte: since } } : {};
+/**
+ * Same bucketing as `getCategoryStats`: a game that is both smurf and unfair
+ * counts as smurf only, so filtering by one category never shows a game the
+ * stats attribute to another.
+ */
+const CATEGORY_QUERIES: Record<MatchCategory, Filter<MatchDocument>> = {
+  smurf: { isSmurfGame: true },
+  unfair: { isSmurfGame: { $ne: true }, isUnfairGame: true },
+  balanced: { isSmurfGame: { $ne: true }, isUnfairGame: { $ne: true } },
+};
+
+/** The margin isn't a stored field, so it is recomputed per document. */
+const goalDiffQuery = (goalDiff: GoalDiff): Filter<MatchDocument> => {
+  const margin = { $abs: { $subtract: ["$teamGoals", "$opponentGoals"] } };
+  const value = Number.parseInt(goalDiff, 10);
+
+  return {
+    $expr: goalDiff.endsWith("+")
+      ? { $gte: [margin, value] }
+      : { $eq: [margin, value] },
+  };
+};
+
+const buildQuery = ({
+  since,
+  result,
+  category,
+  goalDiff,
+}: MatchFilter = {}): Filter<MatchDocument> => ({
+  ...(since ? { createdAt: { $gte: since } } : {}),
+  ...(result ? { result } : {}),
+  ...(category ? CATEGORY_QUERIES[category] : {}),
+  ...(goalDiff ? goalDiffQuery(goalDiff) : {}),
+});
+
+type SearchParamValue = string | string[] | undefined;
+
+const isOption = <T extends string>(
+  options: ReadonlyArray<{ value: T }>,
+  value: SearchParamValue,
+): value is T => options.some((option) => option.value === value);
+
+/**
+ * The query string is user input like any other: anything unparseable degrades
+ * to "no filter" rather than throwing or reaching Mongo.
+ */
+export const parseMatchFilter = (
+  searchParams: Record<string, SearchParamValue>,
+): MatchFilter => {
+  const { since, result, category, diff } = searchParams;
+  const parsed = typeof since === "string" ? new Date(since) : undefined;
+
+  return {
+    ...(parsed && !Number.isNaN(parsed.getTime()) ? { since: parsed } : {}),
+    ...(isOption(MATCH_RESULTS, result) ? { result } : {}),
+    ...(isOption(MATCH_CATEGORIES, category) ? { category } : {}),
+    ...(isOption(GOAL_DIFFS, diff) ? { goalDiff: diff } : {}),
+  };
+};
 
 export const getMatches = async (
   filter: MatchFilter = {},
@@ -184,6 +249,7 @@ export const getCategoryStats = async (
   await connection();
 
   const matches = await getCollection();
+  const query = buildQuery(filter);
   const rows = await matches
     .aggregate<{
       _id: MatchCategory;
@@ -192,7 +258,7 @@ export const getCategoryStats = async (
       losses: number;
     }>([
       // Skipped entirely when unfiltered — an empty $match is a wasted stage.
-      ...(filter.since ? [{ $match: buildQuery(filter) }] : []),
+      ...(Object.keys(query).length > 0 ? [{ $match: query }] : []),
       {
         $group: {
           // A game can be both smurf and unfair. Smurf takes priority so the

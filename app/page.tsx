@@ -2,8 +2,8 @@ import {
   createMatch,
   getMatchCount,
   getMatches,
+  parseMatchFilter,
   type Match,
-  type MatchFilter,
 } from "@/shared/actions/matches";
 import { Badge } from "@/components/ui/badge";
 import MatchmakingForm from "@/features/matchmaking/components/matchmaking-form";
@@ -11,6 +11,7 @@ import { getRankFromMMR } from "@/shared/utils/utils";
 import Image from "next/image";
 import GlobalStats from "@/features/matchmaking/components/global-stats";
 import TodayFilter from "@/features/matchmaking/components/today-filter";
+import MatchFilters from "@/features/matchmaking/components/match-filters";
 
 const RESULT_STYLES = {
   win: {
@@ -115,14 +116,14 @@ function MatchRow({ match }: { match: Match }) {
 }
 
 export default async function Home({ searchParams }: PageProps<"/">) {
-  const { since } = await searchParams;
-
-  // The query string is user input like any other — an unparseable `since`
-  // degrades to "no filter" rather than throwing.
-  const parsed = typeof since === "string" ? new Date(since) : undefined;
-  const filter: MatchFilter =
-    parsed && !Number.isNaN(parsed.getTime()) ? { since: parsed } : {};
+  const filter = parseMatchFilter(await searchParams);
   const todayOnly = filter.since !== undefined;
+  // "12 games today" only stays true while the list is the whole day; as soon
+  // as a game filter narrows it, the counter has to say so.
+  const isFiltered =
+    filter.result !== undefined ||
+    filter.category !== undefined ||
+    filter.goalDiff !== undefined;
 
   const [matches, total] = await Promise.all([
     getMatches(filter),
@@ -147,18 +148,24 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   it slide on every toggle. */}
               <div className="mb-2 flex items-center gap-6">
                 <p className="font-bold tabular-nums text-muted-foreground">
-                  {total} games {todayOnly ? "today" : "recorded"}
+                  {total} games{" "}
+                  {isFiltered ? "matching" : todayOnly ? "today" : "recorded"}
                 </p>
                 <TodayFilter enabled={todayOnly} />
               </div>
             </div>
+            <MatchFilters />
             {/* Fixed height, not max-height: the parent row is items-center, so
                 a list that shrinks with the filter would re-center and drag the
                 header — and the switch — up and down. */}
             <div className="h-105 overflow-y-auto mb-8">
               {matches.length === 0 ? (
                 <p className="text-muted-foreground">
-                  {todayOnly ? "No match today." : "No match yet."}
+                  {isFiltered
+                    ? "No match with these filters."
+                    : todayOnly
+                      ? "No match today."
+                      : "No match yet."}
                 </p>
               ) : (
                 <ul className="flex w-full flex-col gap-2">
@@ -175,7 +182,10 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           <h2 className="mb-2 font-bold text-2xl">
             {todayOnly ? "Today's stats" : "Global stats"}
           </h2>
-          <GlobalStats filter={filter} />
+          {/* Only the day filter reaches the stats: narrowing them to one
+              category or one result would leave the breakdowns showing a
+              single 100% slice. */}
+          <GlobalStats filter={{ since: filter.since }} />
         </div>
       </div>
     </div>
