@@ -2,6 +2,7 @@ import {
   getCategoryStats,
   getWinRateStats,
   type MatchCategory,
+  type MatchFilter,
 } from "@/shared/actions/matches";
 import DonutChart, {
   ChartLegend,
@@ -35,16 +36,22 @@ function StatCard({
   );
 }
 
-function WinRateBars({
+type RateBar = {
+  label: string;
+  /** Where the fill stops on the fixed 0–100% track. */
+  rate: number;
+  /** Numerator and denominator behind `rate`, shown as a raw count. */
+  value: number;
+  total: number;
+  color: string;
+};
+
+function RateBars({
   bars,
+  emptyLabel,
 }: {
-  bars: {
-    label: string;
-    rate: number;
-    wins: number;
-    games: number;
-    color: string;
-  }[];
+  bars: RateBar[];
+  emptyLabel: string;
 }) {
   return (
     <ul className="flex flex-col gap-3">
@@ -53,15 +60,15 @@ function WinRateBars({
           <div className="flex items-baseline justify-between text-sm">
             <span className="font-bold">{bar.label}</span>
             <span className="tabular-nums text-muted-foreground">
-              {bar.games > 0 ? (
+              {bar.total > 0 ? (
                 <>
                   {bar.rate.toFixed(1)}%{" "}
                   <span className="text-xs">
-                    ({bar.wins}/{bar.games})
+                    ({bar.value}/{bar.total})
                   </span>
                 </>
               ) : (
-                <span className="text-xs">no game</span>
+                <span className="text-xs">{emptyLabel}</span>
               )}
             </span>
           </div>
@@ -78,10 +85,10 @@ function WinRateBars({
   );
 }
 
-async function GlobalStats() {
+async function GlobalStats({ filter = {} }: { filter?: MatchFilter }) {
   const [stats, breakdown] = await Promise.all([
-    getWinRateStats(),
-    getCategoryStats(),
+    getWinRateStats(filter),
+    getCategoryStats(filter),
   ]);
 
   const hasGames = stats.totalGames > 0;
@@ -108,9 +115,21 @@ async function GlobalStats() {
     color: CATEGORY_COLORS[category.category],
   }));
 
+  // Shares of the losses only — unlike the win rates next door, these sum to 100.
+  const lossBars: RateBar[] = breakdown.categories.map((category) => ({
+    label: category.label,
+    rate: category.lossShare,
+    value: category.losses,
+    total: breakdown.totalLosses,
+    color: CATEGORY_COLORS[category.category],
+  }));
+
   return (
     <div className="grid w-full gap-4 lg:grid-cols-3">
-      <StatCard title="Win rate" hint={`${stats.totalGames} games recorded`}>
+      <StatCard
+        title="Win rate"
+        hint={`${stats.totalGames} games ${filter.since ? "today" : "recorded"}`}
+      >
         <DonutChart
           slices={resultSlices}
           centerValue={hasGames ? `${Math.round(stats.winRate)}%` : "–"}
@@ -122,6 +141,13 @@ async function GlobalStats() {
           }
         />
         <ChartLegend slices={resultSlices} />
+
+        <div className="flex flex-col gap-3 border-t pt-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+            Losses by type · share of {stats.losses} losses
+          </p>
+          <RateBars emptyLabel="no loss" bars={lossBars} />
+        </div>
       </StatCard>
 
       <StatCard title="Games by type" hint="Smurf takes priority over unfair">
@@ -144,12 +170,13 @@ async function GlobalStats() {
         title="Win rate by type"
         hint="Wins within each type · scale 0–100%"
       >
-        <WinRateBars
+        <RateBars
+          emptyLabel="no game"
           bars={breakdown.categories.map((category) => ({
             label: category.label,
             rate: category.winRate,
-            wins: category.wins,
-            games: category.games,
+            value: category.wins,
+            total: category.games,
             color: CATEGORY_COLORS[category.category],
           }))}
         />

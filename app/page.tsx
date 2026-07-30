@@ -3,13 +3,14 @@ import {
   getMatchCount,
   getMatches,
   type Match,
+  type MatchFilter,
 } from "@/shared/actions/matches";
 import { Badge } from "@/components/ui/badge";
 import MatchmakingForm from "@/features/matchmaking/components/matchmaking-form";
 import { getRankFromMMR } from "@/shared/utils/utils";
 import Image from "next/image";
 import GlobalStats from "@/features/matchmaking/components/global-stats";
-import { Switch } from "@base-ui/react";
+import TodayFilter from "@/features/matchmaking/components/today-filter";
 
 const RESULT_STYLES = {
   win: {
@@ -113,11 +114,24 @@ function MatchRow({ match }: { match: Match }) {
   );
 }
 
-export default async function Home() {
-  const [matches, total] = await Promise.all([getMatches(), getMatchCount()]);
+export default async function Home({ searchParams }: PageProps<"/">) {
+  const { since } = await searchParams;
+
+  // The query string is user input like any other — an unparseable `since`
+  // degrades to "no filter" rather than throwing.
+  const parsed = typeof since === "string" ? new Date(since) : undefined;
+  const filter: MatchFilter =
+    parsed && !Number.isNaN(parsed.getTime()) ? { since: parsed } : {};
+  const todayOnly = filter.since !== undefined;
+
+  const [matches, total] = await Promise.all([
+    getMatches(filter),
+    // Same filter on both, otherwise the counter contradicts the list.
+    getMatchCount(filter),
+  ]);
 
   return (
-    <div className="h-full w-full p-2 overflow-hidden">
+    <div className="h-screen w-full p-2">
       <div className="h-full flex flex-col p-8 w-full">
         <div className="flex w-full gap-10 items-center">
           <div className="flex flex-col gap-2 min-w-100 h-full">
@@ -128,14 +142,24 @@ export default async function Home() {
           <div className="flex flex-col gap-2 w-full h-full">
             <div className="flex justify-between items-center">
               <h2 className="mb-2 font-bold text-2xl">Games</h2>
-              <p className="font-bold text-muted-foreground">
-                {" "}
-                {total} games recorded
-              </p>
+              {/* Counter first: its width changes with the filter, so keeping
+                  the switch last pins it to the right edge instead of letting
+                  it slide on every toggle. */}
+              <div className="mb-2 flex items-center gap-6">
+                <p className="font-bold tabular-nums text-muted-foreground">
+                  {total} games {todayOnly ? "today" : "recorded"}
+                </p>
+                <TodayFilter enabled={todayOnly} />
+              </div>
             </div>
-            <div className="max-h-105 flex-1 overflow-y-auto mb-8">
+            {/* Fixed height, not max-height: the parent row is items-center, so
+                a list that shrinks with the filter would re-center and drag the
+                header — and the switch — up and down. */}
+            <div className="h-105 overflow-y-auto mb-8">
               {matches.length === 0 ? (
-                <p className="text-muted-foreground">No match yet.</p>
+                <p className="text-muted-foreground">
+                  {todayOnly ? "No match today." : "No match yet."}
+                </p>
               ) : (
                 <ul className="flex w-full flex-col gap-2">
                   {matches.map((match) => (
@@ -148,8 +172,10 @@ export default async function Home() {
         </div>
 
         <div className="flex flex-col gap-2 w-full h-full">
-          <h2 className="mb-2 font-bold text-2xl">Global stats</h2>
-          <GlobalStats />
+          <h2 className="mb-2 font-bold text-2xl">
+            {todayOnly ? "Today's stats" : "Global stats"}
+          </h2>
+          <GlobalStats filter={filter} />
         </div>
       </div>
     </div>

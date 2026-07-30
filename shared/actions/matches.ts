@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { refresh } from "next/cache";
+import type { Filter } from "mongodb";
 import { getDb } from "@/shared/db";
 
 const COLLECTION = "matches";
@@ -98,13 +99,26 @@ export const createMatch = async (formData: FormData) => {
   refresh();
 };
 
-export const getMatches = async (limit = 50): Promise<Match[]> => {
+/**
+ * `since` is an absolute instant, not a calendar day: the browser computes its
+ * own midnight and hands it over, so the boundary is right whatever the
+ * timezone the server runs in.
+ */
+export type MatchFilter = { since?: Date };
+
+const buildQuery = ({ since }: MatchFilter = {}): Filter<MatchDocument> =>
+  since ? { createdAt: { $gte: since } } : {};
+
+export const getMatches = async (
+  filter: MatchFilter = {},
+  limit = 50,
+): Promise<Match[]> => {
   // Read at request time so the match list is never baked into the build.
   await connection();
 
   const matches = await getCollection();
   const docs = await matches
-    .find()
+    .find(buildQuery(filter))
     .sort({ createdAt: -1 })
     .limit(limit)
     .toArray();
@@ -113,14 +127,16 @@ export const getMatches = async (limit = 50): Promise<Match[]> => {
   return docs.map(({ _id, ...doc }) => ({ ...doc, id: _id.toString() }));
 };
 
-export const getMatchCount = async (): Promise<number> => {
+export const getMatchCount = async (filter: MatchFilter = {}): Promise<number> => {
   await connection();
 
   const matches = await getCollection();
-  return matches.countDocuments();
+  return matches.countDocuments(buildQuery(filter));
 };
 
-export const getWinRateStats = async (): Promise<{
+export const getWinRateStats = async (
+  filter: MatchFilter = {},
+): Promise<{
   totalGames: number;
   wins: number;
   losses: number;
@@ -130,9 +146,10 @@ export const getWinRateStats = async (): Promise<{
   await connection();
 
   const matches = await getCollection();
-  const totalGames = await matches.countDocuments();
-  const wins = await matches.countDocuments({ result: "win" });
-  const losses = await matches.countDocuments({ result: "loss" });
+  const query = buildQuery(filter);
+  const totalGames = await matches.countDocuments(query);
+  const wins = await matches.countDocuments({ ...query, result: "win" });
+  const losses = await matches.countDocuments({ ...query, result: "loss" });
 
   return {
     totalGames,
@@ -148,21 +165,34 @@ export type CategoryStat = {
   label: string;
   games: number;
   wins: number;
+  losses: number;
   /** Share of all games that fall in this category. */
   gameRate: number;
   /** Win rate *within* this category — these do not sum to 100. */
   winRate: number;
+  /** Share of all *losses* that fall in this category — these sum to 100. */
+  lossShare: number;
 };
 
-export const getCategoryStats = async (): Promise<{
+export const getCategoryStats = async (
+  filter: MatchFilter = {},
+): Promise<{
   totalGames: number;
+  totalLosses: number;
   categories: CategoryStat[];
 }> => {
   await connection();
 
   const matches = await getCollection();
   const rows = await matches
-    .aggregate<{ _id: MatchCategory; games: number; wins: number }>([
+    .aggregate<{
+      _id: MatchCategory;
+      games: number;
+      wins: number;
+      losses: number;
+    }>([
+      // Skipped entirely when unfiltered — an empty $match is a wasted stage.
+      ...(filter.since ? [{ $match: buildQuery(filter) }] : []),
       {
         $group: {
           // A game can be both smurf and unfair. Smurf takes priority so the
@@ -178,6 +208,7 @@ export const getCategoryStats = async (): Promise<{
           },
           games: { $sum: 1 },
           wins: { $sum: { $cond: [{ $eq: ["$result", "win"] }, 1, 0] } },
+          losses: { $sum: { $cond: [{ $eq: ["$result", "loss"] }, 1, 0] } },
         },
       },
     ])
@@ -185,22 +216,27 @@ export const getCategoryStats = async (): Promise<{
 
   const byCategory = new Map(rows.map((row) => [row._id, row]));
   const totalGames = rows.reduce((sum, row) => sum + row.games, 0);
+  const totalLosses = rows.reduce((sum, row) => sum + row.losses, 0);
 
   return {
     totalGames,
+    totalLosses,
     // Walk MATCH_CATEGORIES so empty categories still get a (zeroed) entry and
     // the order — hence the colors — never depends on the aggregation output.
     categories: MATCH_CATEGORIES.map(({ value, label }) => {
       const games = byCategory.get(value)?.games ?? 0;
       const wins = byCategory.get(value)?.wins ?? 0;
+      const losses = byCategory.get(value)?.losses ?? 0;
 
       return {
         category: value,
         label,
         games,
         wins,
+        losses,
         gameRate: totalGames > 0 ? (games / totalGames) * 100 : 0,
         winRate: games > 0 ? (wins / games) * 100 : 0,
+        lossShare: totalLosses > 0 ? (losses / totalLosses) * 100 : 0,
       };
     }),
   };

@@ -3,11 +3,31 @@
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import React from "react";
+import { useFormStatus } from "react-dom";
+import { LoaderCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 interface MatchmakingFormProps {
   createMatch: (formData: FormData) => Promise<void>;
 }
+
+/**
+ * Its own component on purpose: `useFormStatus` reports the status of the
+ * enclosing form, so it has to be read from a child of `<form>`, not from the
+ * component that renders it.
+ */
+const SubmitButton = () => {
+  const { pending } = useFormStatus();
+
+  return (
+    // `disabled` puts the native attribute on the button, so a second click
+    // during the insert can't submit the form again.
+    <Button type="submit" variant="default" disabled={pending}>
+      {pending && <LoaderCircle className="animate-spin" />}
+      {pending ? "Saving…" : "Submit"}
+    </Button>
+  );
+};
 
 const MatchmakingForm = ({ createMatch }: MatchmakingFormProps) => {
   return (
@@ -86,9 +106,7 @@ const MatchmakingForm = ({ createMatch }: MatchmakingFormProps) => {
       </div>
 
       <div className="w-full flex justify-end">
-        <Button type="submit" variant="default">
-          Submit
-        </Button>
+        <SubmitButton />
       </div>
     </form>
   );
