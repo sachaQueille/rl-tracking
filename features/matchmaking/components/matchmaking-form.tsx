@@ -30,10 +30,17 @@ const SubmitButton = () => {
 };
 
 const MatchmakingForm = ({ createMatch }: MatchmakingFormProps) => {
+  // Base UI's Checkbox keeps `checked` in React state and doesn't listen to the
+  // form's `reset` event, so the automatic reset React runs after the action
+  // would leave the box ticked. Driving it from here and clearing it in
+  // `onReset` keeps it in sync with the native inputs.
+  const [isSmurfGame, setIsSmurfGame] = React.useState(false);
+
   return (
     <form
       className="flex w-full max-w-sm items-start gap-4 flex-col rounded-xl border p-4 mb-6"
       action={createMatch}
+      onReset={() => setIsSmurfGame(false)}
     >
       <div className="flex flex-col gap-2 w-full">
         <p className="font-bold">Our team</p>
@@ -98,7 +105,13 @@ const MatchmakingForm = ({ createMatch }: MatchmakingFormProps) => {
           required
         />
         <div className="flex items-center space-x-2">
-          <Checkbox name="isSmurfGame" className="mt-2 cursor-pointer" />
+          <Checkbox
+            id="isSmurfGame"
+            name="isSmurfGame"
+            checked={isSmurfGame}
+            onCheckedChange={setIsSmurfGame}
+            className="mt-2 cursor-pointer"
+          />
           <label htmlFor="isSmurfGame" className="text-sm font-bold mt-1.5">
             Smurf game
           </label>

@@ -133,8 +133,8 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   return (
     <div className="h-screen w-full p-2">
       <div className="h-full flex flex-col p-8 w-full">
-        <div className="flex w-full gap-10 items-center">
-          <div className="flex flex-col gap-2 min-w-100 h-full">
+        <div className="flex w-full gap-10 items-center min-[1190px]:flex-row flex-col">
+          <div className="flex flex-col gap-2 min-w-full min-[1190px]:min-w-100 h-full">
             <h2 className="mb-2 font-bold text-2xl">Add new game</h2>
             <MatchmakingForm createMatch={createMatch} />
           </div>
